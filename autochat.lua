@@ -13,12 +13,7 @@ local function sendRandomChat(nick)
     msg= msg..nick 
 	TextChatService.TextChannels.RBXGeneral:SendAsync(msg)
 end
-local TARGET_CFRAME = CFrame.new(
-	1489.33118, -21.9847832, -637.773376,
-	0.484614819, 8.05178058e-09, -0.874727666,
-	-5.36718083e-08, 1, -2.05302442e-08,
-	0.874727666, 5.68974734e-08, 0.484614819
-)
+
 local TIER_BY_STRING = {
 	["0 0.764706 1.000000 0.333333 1 0.764706 1.000000 0.333333"] = "Uncommon",
 	["0 0.333333 0.635294 1.000000 1 0.333333 0.635294 1.000000"] = "Rare",
