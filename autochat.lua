@@ -4,8 +4,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local TARGET_EVENT_NAME = "RE/ReplicateTextEffect"
 local chatMessages = {
-    "/givesecret ",
-    "Kelazz bang "
+    "/givesecret "
 }
 local function sendRandomChat(nick)
     local rd = math.random(1, #chatMessages)
