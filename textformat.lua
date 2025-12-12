@@ -3,8 +3,8 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 
 local replaced = false
-local clonedFor = {}     -- [userId] = clonedInstance
-local connections = {}   -- [userId] = connection
+local clonedFor = {}    -- [userId] = clonedInstance
+local connections = {}  -- [userId] = connection
 
 local function formatNumber(n)
     local formatted = tostring(n)
@@ -16,51 +16,93 @@ local function formatNumber(n)
     return formatted
 end
 
-local function getTeamNeutralIfChildrenPresent()
-    local playerList = CoreGui:FindFirstChild("PlayerList")
-    if not playerList then return nil end
-    local children = playerList:FindFirstChild("Children")
-    if not children then return nil end
-    local offsetFrame = children:FindFirstChild("OffsetFrame")
-    if not offsetFrame then return nil end
-    local playerScrollList = offsetFrame:FindFirstChild("PlayerScrollList")
-    if not playerScrollList then return nil end
-    local sizeOffsetFrame = playerScrollList:FindFirstChild("SizeOffsetFrame")
-    if not sizeOffsetFrame then return nil end
-    local container = sizeOffsetFrame:FindFirstChild("ScrollingFrameContainer")
-    if not container then return nil end
-    local clipping = container:FindFirstChild("ScrollingFrameClippingFrame")
-    if not clipping then return nil end
-    local scrollingFrame = clipping:FindFirstChild("ScrollingFrame")
-    if not scrollingFrame then return nil end
-    local offsetUndo = scrollingFrame:FindFirstChild("OffsetUndoFrame")
-    if not offsetUndo then return nil end
-    local teamNeutral = offsetUndo:FindFirstChild("TeamList_Neutral")
-    return teamNeutral
+-- cari root PlayerList yang tersedia (pakai Children kalau ada)
+local function getPlayerListRoot()
+    local pl = CoreGui:FindFirstChild("PlayerList")
+    if not pl then return nil end
+    local children = pl:FindFirstChild("Children")
+    if children then
+        return children
+    end
+    return pl
+end
+
+-- cari instance GameStat_Caught yang 'berasosiasi' dengan userId
+-- strategi: iterasi semua descendant yang punya nama "GameStat_Caught" (atau punya PlayerStatDisplay),
+-- lalu naik beberapa level ke atas untuk cek apakah ada ancestor yang mengandung userId di namanya
+local function findGameStatForUser(root, userId)
+    if not root then return nil end
+    local uidStr = tostring(userId)
+    for _, inst in ipairs(root:GetDescendants()) do
+        local hasStat = inst.Name == "GameStat_Caught"
+        if not hasStat then
+            local maybe = inst:FindFirstChild("GameStat_Caught")
+            if maybe then
+                inst = maybe
+                hasStat = true
+            end
+        end
+        if hasStat then
+            local display = inst:FindFirstChild("PlayerStatDisplay")
+            if display then
+                -- naik sampai 8 tingkat mencari nama yang mengandung uid
+                local ancestor = inst
+                for i = 1, 8 do
+                    ancestor = ancestor.Parent
+                    if not ancestor then break end
+                    if string.find(ancestor.Name, uidStr, 1, true) then
+                        return inst, ancestor -- kembalikan GameStat_Caught dan ancestor yang match
+                    end
+                end
+                -- fallback: kadang struktur tidak menyertakan uid di nama ancestor.
+                -- coba cek bila ancestor mengandung "PlayerEntry" atau "Player_" dll + memiliki PlayerEntryContentFrame
+                ancestor = inst.Parent
+                for i = 1, 8 do
+                    if not ancestor then break end
+                    if ancestor:FindFirstChild("PlayerEntryContentFrame") or string.find(ancestor.Name, "PlayerEntry", 1, true) or string.find(ancestor.Name, "Player_", 1, true) or string.find(ancestor.Name, "p_", 1, true) then
+                        -- coba cari di antara anak-anaknya nama yang mengandung uid
+                        for _, sub in ipairs(ancestor:GetDescendants()) do
+                            if string.find(sub.Name, uidStr, 1, true) then
+                                return inst, sub
+                            end
+                        end
+                    end
+                    ancestor = ancestor.Parent
+                end
+            end
+        end
+    end
+    return nil
 end
 
 local function clearAllClonesAndConns()
     for userId, conn in pairs(connections) do
-        if conn and conn.Disconnect then
-            pcall(function() conn:Disconnect() end)
-        end
+        pcall(function() conn:Disconnect() end)
         connections[userId] = nil
+    end
+    for userId, inst in pairs(clonedFor) do
+        pcall(function()
+            if inst and inst.Parent then
+                inst:Destroy()
+            end
+        end)
         clonedFor[userId] = nil
     end
 end
 
-local function ensureCloneForEntry(player, overlay)
-    if not player or not overlay then return end
+local function ensureCloneForStat(player, statFrame, entryAncestor)
+    if not player or not statFrame then return nil end
     local userId = player.UserId
-    if overlay:FindFirstChild("GameStat_Caught_Custom") then
-        clonedFor[userId] = overlay.GameStat_Caught_Custom
+    if clonedFor[userId] and clonedFor[userId].Parent then
         return clonedFor[userId]
     end
-    local originalStat = overlay:FindFirstChild("GameStat_Caught")
-    if not originalStat then return nil end
-    local originalDisplay = originalStat:FindFirstChild("PlayerStatDisplay")
-    if not originalDisplay then return nil end
-
+    -- jika sudah ada custom di overlay, gunakan itu
+    if statFrame.Parent and statFrame.Parent:FindFirstChild("GameStat_Caught_Custom") then
+        clonedFor[userId] = statFrame.Parent:FindFirstChild("GameStat_Caught_Custom")
+        return clonedFor[userId]
+    end
+    -- clone statFrame
+    local originalStat = statFrame
     local cloned = originalStat:Clone()
     cloned.Name = "GameStat_Caught_Custom"
     local child = cloned:FindFirstChild("PlayerStatDisplay")
@@ -72,15 +114,23 @@ local function ensureCloneForEntry(player, overlay)
         end
         child.Text = formatNumber(startVal)
     end
-    cloned.Parent = overlay
+    -- parent ke tempat yang benar: utamakan entryAncestor (kalau relevan), kalau tidak parent ke original parent
+    local parentTarget = entryAncestor
+    if parentTarget and parentTarget:FindFirstChild("PlayerEntryContentFrame") then
+        parentTarget = parentTarget:FindFirstChild("PlayerEntryContentFrame"):FindFirstChild("OverlayFrame") or parentTarget
+    else
+        parentTarget = originalStat.Parent or parentTarget
+    end
+    cloned.Parent = parentTarget
     cloned.Visible = true
-    originalStat.Visible = false
+    -- sembunyikan original
+    pcall(function() originalStat.Visible = false end)
     clonedFor[userId] = cloned
     return cloned
 end
 
-local function bindCaughtToClone(player, clone)
-    if not player or not clone then return end
+local function bindCaught(player, cloned)
+    if not player or not cloned then return end
     local userId = player.UserId
     if connections[userId] then
         pcall(function() connections[userId]:Disconnect() end)
@@ -90,10 +140,9 @@ local function bindCaughtToClone(player, clone)
     if not leaderstats then return end
     local caught = leaderstats:FindFirstChild("Caught") or leaderstats:WaitForChild("Caught", 1)
     if not caught then return end
-
     local conn = caught:GetPropertyChangedSignal("Value"):Connect(function()
-        if not clone.Parent then return end
-        local disp = clone:FindFirstChild("PlayerStatDisplay_Custom") or clone:FindFirstChild("PlayerStatDisplay")
+        if not cloned.Parent then return end
+        local disp = cloned:FindFirstChild("PlayerStatDisplay_Custom") or cloned:FindFirstChild("PlayerStatDisplay")
         if disp then
             disp.Text = formatNumber(caught.Value)
         end
@@ -101,20 +150,13 @@ local function bindCaughtToClone(player, clone)
     connections[userId] = conn
 end
 
-local function processAllEntries(teamNeutral)
-    if not teamNeutral then return end
+local function processAllPlayers(root)
     for _, p in ipairs(Players:GetPlayers()) do
-        local entry = teamNeutral:FindFirstChild("PlayerEntry_" .. tostring(p.UserId))
-        if entry then
-            local content = entry:FindFirstChild("PlayerEntryContentFrame")
-            if content then
-                local overlay = content:FindFirstChild("OverlayFrame")
-                if overlay then
-                    local clone = ensureCloneForEntry(p, overlay)
-                    if clone then
-                        bindCaughtToClone(p, clone)
-                    end
-                end
+        local statFrame, ancestor = findGameStatForUser(root, p.UserId)
+        if statFrame then
+            local cloned = ensureCloneForStat(p, statFrame, ancestor)
+            if cloned then
+                bindCaught(p, cloned)
             end
         end
     end
@@ -123,15 +165,15 @@ end
 task.spawn(function()
     while true do
         task.wait(1)
-        local teamNeutral = getTeamNeutralIfChildrenPresent()
-        if not teamNeutral then
+        local root = getPlayerListRoot()
+        if not root then
             if replaced then
                 replaced = false
                 clearAllClonesAndConns()
             end
         else
             if not replaced then
-                processAllEntries(teamNeutral)
+                processAllPlayers(root)
                 replaced = true
             end
         end
