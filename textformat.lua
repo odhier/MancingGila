@@ -1,12 +1,27 @@
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
-local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
 
-local function getTeamNeutral()
-    local ok, playerList = pcall(function() return CoreGui:WaitForChild("PlayerList", 10) end)
-    if not ok or not playerList then return nil end
+local replaced = false
+local clonedFor = {}     -- [userId] = clonedInstance
+local connections = {}   -- [userId] = connection
 
-    local offsetFrame = playerList:WaitForChild("Children"):FindFirstChild("OffsetFrame")
+local function formatNumber(n)
+    local formatted = tostring(n)
+    while true do
+        local updated, k = formatted:gsub("^(-?%d+)(%d%d%d)", "%1.%2")
+        formatted = updated
+        if k == 0 then break end
+    end
+    return formatted
+end
+
+local function getTeamNeutralIfChildrenPresent()
+    local playerList = CoreGui:FindFirstChild("PlayerList")
+    if not playerList then return nil end
+    local children = playerList:FindFirstChild("Children")
+    if not children then return nil end
+    local offsetFrame = children:FindFirstChild("OffsetFrame")
     if not offsetFrame then return nil end
     local playerScrollList = offsetFrame:FindFirstChild("PlayerScrollList")
     if not playerScrollList then return nil end
@@ -24,146 +39,101 @@ local function getTeamNeutral()
     return teamNeutral
 end
 
-local clonedFor = {}
-local connections = {}
-
-local function findPlayerEntry(teamNeutral, userId)
-    if not teamNeutral then return nil end
-    return teamNeutral:FindFirstChild("PlayerEntry_" .. tostring(userId))
-end
-
-local function formatNumber(n)
-    local formatted = tostring(n)
-    while true do
-        local updated, k = formatted:gsub("^(-?%d+)(%d%d%d)", "%1.%2")
-        formatted = updated
-        if k == 0 then break end
-    end
-    return formatted
-end
-
-local function makeCloneAndBind(player, teamNeutral)
-    if not player or not teamNeutral then return end
-    local userId = player.UserId
-    if clonedFor[userId] then return end
-
-    local entry = findPlayerEntry(teamNeutral, userId)
-    if not entry then
-        return
-    end
-
-    local content = entry:FindFirstChild("PlayerEntryContentFrame")
-    if not content then return end
-    local overlay = content:FindFirstChild("OverlayFrame")
-    if not overlay then return end
-    local originalStat = overlay:FindFirstChild("GameStat_Caught")
-    if not originalStat then return end
-    local originalDisplay = originalStat:FindFirstChild("PlayerStatDisplay")
-    if not originalDisplay then return end
-
-    if overlay:FindFirstChild("GameStat_Caught_Custom") then
-        clonedFor[userId] = true
-    else
-        local cloned = originalStat:Clone()
-        cloned.Name = "GameStat_Caught_Custom"
-
-        local child = cloned:FindFirstChild("PlayerStatDisplay")
-        if child then
-            child.Name = "PlayerStatDisplay_Custom"
-            child.Text = tostring(player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Caught") and player.leaderstats.Caught.Value or 0)
+local function clearAllClonesAndConns()
+    for userId, conn in pairs(connections) do
+        if conn and conn.Disconnect then
+            pcall(function() conn:Disconnect() end)
         end
-
-        cloned.Parent = overlay
-        cloned.Visible = true
-
-        originalStat.Visible = false
-
-        clonedFor[userId] = true
+        connections[userId] = nil
+        clonedFor[userId] = nil
     end
+end
 
-    local leaderstats = player:FindFirstChild("leaderstats")
-    if not leaderstats then
-        leaderstats = player:WaitForChild("leaderstats", 5)
+local function ensureCloneForEntry(player, overlay)
+    if not player or not overlay then return end
+    local userId = player.UserId
+    if overlay:FindFirstChild("GameStat_Caught_Custom") then
+        clonedFor[userId] = overlay.GameStat_Caught_Custom
+        return clonedFor[userId]
     end
+    local originalStat = overlay:FindFirstChild("GameStat_Caught")
+    if not originalStat then return nil end
+    local originalDisplay = originalStat:FindFirstChild("PlayerStatDisplay")
+    if not originalDisplay then return nil end
+
+    local cloned = originalStat:Clone()
+    cloned.Name = "GameStat_Caught_Custom"
+    local child = cloned:FindFirstChild("PlayerStatDisplay")
+    if child then
+        child.Name = "PlayerStatDisplay_Custom"
+        local startVal = 0
+        if player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Caught") then
+            startVal = player.leaderstats.Caught.Value
+        end
+        child.Text = formatNumber(startVal)
+    end
+    cloned.Parent = overlay
+    cloned.Visible = true
+    originalStat.Visible = false
+    clonedFor[userId] = cloned
+    return cloned
+end
+
+local function bindCaughtToClone(player, clone)
+    if not player or not clone then return end
+    local userId = player.UserId
+    if connections[userId] then
+        pcall(function() connections[userId]:Disconnect() end)
+        connections[userId] = nil
+    end
+    local leaderstats = player:FindFirstChild("leaderstats") or player:WaitForChild("leaderstats", 1)
     if not leaderstats then return end
-    local caught = leaderstats:FindFirstChild("Caught") or leaderstats:WaitForChild("Caught", 5)
+    local caught = leaderstats:FindFirstChild("Caught") or leaderstats:WaitForChild("Caught", 1)
     if not caught then return end
 
-    if connections[userId] and connections[userId].caughtConn then
-        connections[userId].caughtConn:Disconnect()
-    end
-
-    local caughtConn = caught:GetPropertyChangedSignal("Value"):Connect(function()
-        local entryNow = findPlayerEntry(teamNeutral, userId)
-        if not entryNow then return end
-        local contentNow = entryNow:FindFirstChild("PlayerEntryContentFrame")
-        if not contentNow then return end
-        local overlayNow = contentNow:FindFirstChild("OverlayFrame")
-        if not overlayNow then return end
-        local clonedStat = overlayNow:FindFirstChild("GameStat_Caught_Custom")
-        if not clonedStat then return end
-        local display = clonedStat:FindFirstChild("PlayerStatDisplay_Custom")
-        if display then
-            display.Text = formatNumber(caught.Value)
+    local conn = caught:GetPropertyChangedSignal("Value"):Connect(function()
+        if not clone.Parent then return end
+        local disp = clone:FindFirstChild("PlayerStatDisplay_Custom") or clone:FindFirstChild("PlayerStatDisplay")
+        if disp then
+            disp.Text = formatNumber(caught.Value)
         end
     end)
-
-    local entryRemovedConn
-    entryRemovedConn = entry.AncestryChanged:Connect(function(_, parent)
-        if not parent then
-            if connections[userId] and connections[userId].caughtConn then
-                connections[userId].caughtConn:Disconnect()
-            end
-            if connections[userId] and connections[userId].entryRemovedConn then
-                connections[userId].entryRemovedConn:Disconnect()
-            end
-            connections[userId] = nil
-            clonedFor[userId] = nil
-            entryRemovedConn = nil
-        end
-    end)
-
-    connections[userId] = {caughtConn = caughtConn, entryRemovedConn = entryRemovedConn}
+    connections[userId] = conn
 end
 
-local function watchTeamList()
-    local teamNeutral = getTeamNeutral()
-    if not teamNeutral then
-        local tries = 0
-        repeat
-            tries = tries + 1
-            task.wait(0.5)
-            teamNeutral = getTeamNeutral()
-        until teamNeutral or tries > 20
-    end
-    if not teamNeutral then
-        warn("Tidak menemukan TeamList_Neutral. Pastikan PlayerList custom path benar.")
-        return
-    end
-
+local function processAllEntries(teamNeutral)
+    if not teamNeutral then return end
     for _, p in ipairs(Players:GetPlayers()) do
-        task.spawn(function()
-            makeCloneAndBind(p, teamNeutral)
-        end)
-    end
-
-    teamNeutral.ChildAdded:Connect(function(child)
-        for _, p in ipairs(Players:GetPlayers()) do
-            if child.Name == ("PlayerEntry_" .. tostring(p.UserId)) then
-                task.spawn(function()
-                    makeCloneAndBind(p, teamNeutral)
-                end)
-                break
+        local entry = teamNeutral:FindFirstChild("PlayerEntry_" .. tostring(p.UserId))
+        if entry then
+            local content = entry:FindFirstChild("PlayerEntryContentFrame")
+            if content then
+                local overlay = content:FindFirstChild("OverlayFrame")
+                if overlay then
+                    local clone = ensureCloneForEntry(p, overlay)
+                    if clone then
+                        bindCaughtToClone(p, clone)
+                    end
+                end
             end
         end
-    end)
-
-    Players.PlayerAdded:Connect(function(pl)
-        task.spawn(function()
-            task.wait(0.2)
-            makeCloneAndBind(pl, teamNeutral)
-        end)
-    end)
+    end
 end
 
-task.spawn(watchTeamList)
+task.spawn(function()
+    while true do
+        task.wait(1)
+        local teamNeutral = getTeamNeutralIfChildrenPresent()
+        if not teamNeutral then
+            if replaced then
+                replaced = false
+                clearAllClonesAndConns()
+            end
+        else
+            if not replaced then
+                processAllEntries(teamNeutral)
+                replaced = true
+            end
+        end
+    end
+end)
