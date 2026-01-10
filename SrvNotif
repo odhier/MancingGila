@@ -128,16 +128,7 @@ local function extractFishNotification(text)
 	if tierColor ~= "rgb(24, 255, 152)" then return end
 	local fishDataMod = getFishData(fishName)
 	local thumbUrl = string.gsub(fishDataMod.icon, "rbxassetid://","")
-	print("=================================")
-	print(player)
-	print(tierColor)
-	print(fishName)
-	print("Mutasi: ", mutation)
-	print("Weight: ", weight)
-	print("is big: ", isBig)
-	print("is Shiny: ", isShiny)
-	print("Thumb: ", fishDataMod.icon)
-	print("Sell Price: ", fishDataMod.sellPrice)
+	
 	local data = {
 		playerName = player,
 		fishName = fishName,
