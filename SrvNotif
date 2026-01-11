@@ -125,7 +125,17 @@ local function extractFishNotification(text)
         isShiny = true
         fishName = string.gsub(fishName, "%f[%a][Ss]hiny%f[%A]%s*", "")
     end
-	if tierColor ~= "rgb(24, 255, 152)" then return end
+	if not (
+	    tierColor == "rgb(24, 255, 152)"  -- Secret tier
+	    or (
+	        tierColor == "rgb(255, 185, 43)"  -- Legendary tier
+	        and fishName == "Ruby"
+	        and mutation == "GEMSTONE"
+	    )
+	) then
+	    return
+	end
+
 	local fishDataMod = getFishData(fishName)
 	local thumbUrl = string.gsub(fishDataMod.icon, "rbxassetid://","")
 	
